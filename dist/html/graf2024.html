@@ -1,0 +1,460 @@
+<div class="content">
+  <div class="container-fluid">
+    <div class="row">
+      <div class="card card-primary card-outline">
+        <div class="card-body">
+          <h5 class="card-title">Graf Hubungan PDRB Kabupaten/Kota di Provinsi Lampung 2024</h5>
+          <p class="card-text">
+            Jaringan kabupaten/kota berdasarkan PDRB dengan garis menunjukkan selisih &lt; 10.000 miliar
+          </p>
+          
+          <!-- Container untuk graf -->
+          <div id="pdrb-graph" style="width: 150%; height: 600px; margin-bottom: 20px"></div>
+          
+          <!-- Tooltip -->
+          <div class="tooltip" style="position: absolute; opacity: 0; background: rgba(0,0,0,0.8); color: white; padding: 5px 10px; border-radius: 4px; pointer-events: none;"></div>
+          
+          <!-- Load D3.js dan custom script -->
+          <script src="https://d3js.org/d3.v7.min.js"></script>
+          <script>
+            // URL CSV dari Google Spreadsheet
+            const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ9DuODYD0qeBOqX8f2wY6s3pLg_-KjtDZtcVeiv2mOm78Z4ZvRuvotLRR2rKxzJj5HVlICef3mzhP9/pub?output=csv";
+            
+            // Fungsi untuk memuat dan memproses data
+            async function loadData() {
+              try {
+                const response = await d3.csv(csvUrl);
+                const nodes = response.map(d => ({
+                  id: d['Kabupaten/Kota'],
+                  pdrb: +d['PDRB 2024'],  // + untuk konversi ke number
+                  lat: +d.Latitude,
+                  lon: +d.Longitude
+                }));
+                
+                const links = [];
+                const threshold = 10000;
+                
+                // Generate links (mirip logika Python)
+                for (let i = 0; i < nodes.length; i++) {
+                  for (let j = i + 1; j < nodes.length; j++) {
+                    const diff = Math.abs(nodes[i].pdrb - nodes[j].pdrb);
+                    if (diff < threshold) {
+                      links.push({
+                        source: nodes[i].id,
+                        target: nodes[j].id,
+                        diff: diff
+                      });
+                    }
+                  }
+                }
+                
+                return { nodes, links };
+              } catch (error) {
+                console.error("Error loading data:", error);
+                throw error;
+              }
+            }
+
+            // Fungsi utama untuk membuat visualisasi
+            async function createVisualization() {
+              // Muat data
+              const data = await loadData();
+              
+              // Konfigurasi visualisasi
+              const container = document.getElementById('pdrb-graph');
+              const width = container.clientWidth;
+              const height = 800;
+              
+              const svg = d3.select("#pdrb-graph")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height)
+                .style("background", "#f9f9f9");
+              
+              // Grup untuk zoom
+              const g = svg.append("g");
+              
+              // Skala warna untuk node (PDRB)
+              const colorScale = d3.scaleSequential()
+                .domain(d3.extent(data.nodes, d => d.pdrb))
+                .interpolator(d3.interpolateViridis);
+
+              // Skala warna untuk edge (selisih PDRB)
+              const edgeColorScale = d3.scaleSequential()
+                .domain(d3.extent(data.links, d => d.diff))
+                .interpolator(d3.interpolatePlasma);
+
+              // Skala ukuran node
+              const sizeScale = d3.scaleLinear()
+                .domain(d3.extent(data.nodes, d => d.pdrb))
+                .range([10, 30]);
+
+              // Proyeksi koordinat geografis
+              const projection = d3.geoMercator()
+                .fitSize([width, height], {
+                  type: "FeatureCollection",
+                  features: data.nodes.map(d => ({
+                    type: "Feature",
+                    geometry: { type: "Point", coordinates: [d.lon, d.lat] },
+                    properties: {}
+                  }))
+                });
+
+              // Tooltip
+              const tooltip = d3.select(".tooltip");
+              
+              // Gambar edges
+              g.selectAll(".edge")
+                .data(data.links)
+                .enter()
+                .append("line")
+                .attr("class", "edge")
+                .attr("x1", d => {
+                  const sourceNode = data.nodes.find(n => n.id === d.source);
+                  return projection([sourceNode.lon, sourceNode.lat])[0];
+                })
+                .attr("y1", d => {
+                  const sourceNode = data.nodes.find(n => n.id === d.source);
+                  return projection([sourceNode.lon, sourceNode.lat])[1];
+                })
+                .attr("x2", d => {
+                  const targetNode = data.nodes.find(n => n.id === d.target);
+                  return projection([targetNode.lon, targetNode.lat])[0];
+                })
+                .attr("y2", d => {
+                  const targetNode = data.nodes.find(n => n.id === d.target);
+                  return projection([targetNode.lon, targetNode.lat])[1];
+                })
+                .attr("stroke", d => edgeColorScale(d.diff))
+                .attr("stroke-width", 1.5)
+                .attr("opacity", 0.6);
+
+              // Gambar nodes
+              const nodes = g.selectAll(".node")
+                .data(data.nodes)
+                .enter()
+                .append("g")
+                .attr("class", "node")
+                .attr("transform", d => {
+                  const [x, y] = projection([d.lon, d.lat]);
+                  return `translate(${x},${y})`;
+                });
+
+              nodes.append("circle")
+                .attr("r", d => sizeScale(d.pdrb))
+                .attr("fill", d => colorScale(d.pdrb))
+                .attr("stroke", "#000")
+                .attr("stroke-width", 0.5)
+                .on("mouseover", function(event, d) {
+                  d3.select(this).attr("stroke-width", 2);
+                  tooltip.transition()
+                    .duration(200)
+                    .style("opacity", .9);
+                  tooltip.html(`<strong>${d.id}</strong><br/>PDRB: ${d.pdrb.toLocaleString()} Miliar`)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", function() {
+                  d3.select(this).attr("stroke-width", 0.5);
+                  tooltip.transition()
+                    .duration(500)
+                    .style("opacity", 0);
+                });
+
+              nodes.append("text")
+                .text(d => d.id)
+                .attr("dy", d => -sizeScale(d.pdrb) - 5)
+                .attr("text-anchor", "middle")
+                .style("font-size", "9px")
+                .style("pointer-events", "none");
+              
+              // Zoom functionality
+              svg.call(d3.zoom()
+                .scaleExtent([0.5, 8])
+                .on("zoom", (event) => {
+                  g.attr("transform", event.transform);
+                }));
+              
+              // Responsive resize
+              window.addEventListener('resize', function() {
+                const newWidth = container.clientWidth;
+                svg.attr("width", newWidth);
+                
+                // Update projection
+                projection.fitSize([newWidth, height], {
+                  type: "FeatureCollection",
+                  features: data.nodes.map(d => ({
+                    type: "Feature",
+                    geometry: { type: "Point", coordinates: [d.lon, d.lat] },
+                    properties: {}
+                  }))
+                });
+                
+                // Update nodes and edges
+                nodes.attr("transform", d => {
+                  const [x, y] = projection([d.lon, d.lat]);
+                  return `translate(${x},${y})`;
+                });
+                
+                svg.selectAll(".edge")
+                  .attr("x1", d => {
+                    const sourceNode = data.nodes.find(n => n.id === d.source);
+                    return projection([sourceNode.lon, sourceNode.lat])[0];
+                  })
+                  .attr("y1", d => {
+                    const sourceNode = data.nodes.find(n => n.id === d.source);
+                    return projection([sourceNode.lon, sourceNode.lat])[1];
+                  })
+                  .attr("x2", d => {
+                    const targetNode = data.nodes.find(n => n.id === d.target);
+                    return projection([targetNode.lon, targetNode.lat])[0];
+                  })
+                  .attr("y2", d => {
+                    const targetNode = data.nodes.find(n => n.id === d.target);
+                    return projection([targetNode.lon, targetNode.lat])[1];
+                  });
+              });
+            }
+
+            // Jalankan visualisasi
+            createVisualization().catch(error => {
+              console.error("Error creating visualization:", error);
+              document.getElementById("pdrb-graph").innerHTML = 
+                `<div class="alert alert-danger">Gagal memuat data. Silakan coba lagi atau periksa koneksi internet Anda.</div>`;
+            });
+          </script>
+
+<script>
+  // Buat gradient untuk colorbar
+  const defs = svg.append("defs");
+  const gradient = defs.append("linearGradient")
+    .attr("id", `gradient-${selector.substr(1)}`)
+    .attr("x1", "0%")
+    .attr("y1", "0%")
+    .attr("x2", "100%")
+    .attr("y2", "0%");
+
+  // Tambahkan stop colors berdasarkan scale
+  const colorStops = 10;
+  for (let i = 0; i <= colorStops; i++) {
+    const value = colorScale.domain()[0] + 
+                 (i / colorStops) * (colorScale.domain()[1] - colorScale.domain()[0]);
+    gradient.append("stop")
+      .attr("offset", `${(i / colorStops) * 100}%`)
+      .attr("stop-color", colorScale(value));
+  }
+
+  // Gambar colorbar
+  svg.append("rect")
+    .attr("x", 0)
+    .attr("y", 0)
+    .attr("width", width)
+    .attr("height", height - 20)
+    .style("fill", `url(#gradient-${selector.substr(1)})`);
+
+  // Buat axis untuk colorbar
+  const xScale = d3.scaleLinear()
+    .domain(colorScale.domain())
+    .range([0, width]);
+
+  const xAxis = d3.axisBottom(xScale)
+    .ticks(5)
+    .tickSize(5);
+
+  svg.append("g")
+    .attr("transform", `translate(0,${height - 20})`)
+    .call(xAxis);
+  
+
+  // Panggil fungsi createColorbar setelah createVisualization
+  async function createVisualization() {
+    
+    
+    // Setelah membuat visualisasi utama, buat colorbar
+    const data = await loadData();
+    
+    // Skala warna untuk node (PDRB)
+    const nodeColorScale = d3.scaleSequential()
+      .domain(d3.extent(data.nodes, d => d.pdrb))
+      .interpolator(d3.interpolateViridis);
+
+    // Skala warna untuk edge (selisih PDRB)
+    const edgeColorScale = d3.scaleSequential()
+      .domain(d3.extent(data.links, d => d.diff))
+      .interpolator(d3.interpolatePlasma);
+    
+    function createColorbar(selector, colorScale, title) {
+    // 1. Setup SVG dan margin
+    const svg = d3.select(selector).append("g");
+
+    // 2. Buat gradient
+    const gradient = svg.append("defs")
+      .append("linearGradient")
+      .attr("id", `gradient-${selector.substr(1)}`);
+
+    // 3. Tambahkan stop colors
+    for (let i = 0; i <= 10; i++) {
+      const value = colorScale.domain()[0] + (i/10) * (colorScale.domain()[1] - colorScale.domain()[0]);
+      gradient.append("stop")
+        .attr("offset", `${i * 10}%`)
+        .attr("stop-color", colorScale(value));
+    }
+
+    // 4. Gambar colorbar
+    svg.append("rect")
+      .style("fill", `url(#gradient-${selector.substr(1)})`);
+
+    // 5. Tambahkan axis
+    const xAxis = d3.axisBottom(colorScale.copy().range([0, width]));
+    svg.append("g").call(xAxis);
+  }
+      //Panduan Warna
+      src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+      body {
+          font-family: Arial, sans-serif;
+          margin: 20px;
+          background-color: #f5f5f5;
+      }
+      .colorbar-container-wrapper {
+          display: flex;
+          justify-content: flex-start; 
+          align-items: flex-start;
+          width: 100%;
+      }
+      .colorbar-wrapper {
+          display: flex;
+          background-color: white;
+          padding: 20px;
+          border-radius: 8px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          margin-left: 0; 
+      }
+      .colorbar-inner-container {
+          display: flex;
+          align-items: center;
+      }
+      .colorbar {
+          width: 40px;
+          height: 300px;
+          margin-right: 15px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          overflow: hidden;
+      }
+      .tick-values {
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          height: 300px;
+      }
+      .tick-value {
+          font-size: 14px;
+          color: #333;
+          height: 40px;
+          display: flex;
+          align-items: center;
+      }
+      .title {
+          font-weight: bold;
+          margin-bottom: 15px;
+          text-align: left; 
+          font-size: 10px;
+          color: #333;
+    }
+    .footer {
+        margin-top: 15px;
+        text-align: left; 
+        font-size: 10px;
+        color: #999;
+    }
+</style>
+
+<div class="colorbar-container-wrapper">
+    <div class="colorbar-wrapper">
+        <div>
+            <div class="title">Panduan Warna Garis</div>
+            <div class="colorbar-inner-container">
+                <div class="colorbar" id="colorbar"></div>
+                <div class="tick-values" id="ticks"></div>
+            </div>
+            <div class="footer">
+                <div>Selisih PDRB (Miliyar)</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Data configuration
+    const minValue = 4000;
+    const maxValue = 9000;
+    const tickValues = [9000, 8000, 7000, 6000, 5000, 4000];
+
+    // Create color scale
+    const colorScale = d3.scaleSequential(d3.interpolateViridis)
+        .domain([minValue, maxValue]);
+
+    // Create SVG for colorbar
+    const svg = d3.select("#colorbar")
+        .append("svg")
+        .attr("width", "100%")
+        .attr("height", "100%");
+
+    // Create vertical gradient
+    const defs = svg.append("defs");
+    const gradient = defs.append("linearGradient")
+        .attr("id", "vertical-gradient")
+        .attr("x1", "0%")
+        .attr("y1", "0%")
+        .attr("x2", "0%")
+        .attr("y2", "100%");
+
+    // Add color stops
+    gradient.append("stop")
+        .attr("offset", "0%")
+        .attr("stop-color", colorScale(maxValue));
+        
+    gradient.append("stop")
+        .attr("offset", "100%")
+        .attr("stop-color", colorScale(minValue));
+
+    // Draw colorbar
+    svg.append("rect")
+        .attr("width", "100%")
+        .attr("height", "100%")
+        .style("fill", "url(#vertical-gradient)");
+
+    // Add tick values
+    const tickContainer = d3.select("#ticks");
+    
+    tickValues.forEach(value => {
+        tickContainer.append("div")
+            .attr("class", "tick-value")
+            .text(value.toLocaleString());
+    });
+    </script>
+
+
+
+<style>
+.colorbar-container {
+  background: white;
+  padding: 15px;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  margin-bottom: 15px;
+}
+.colorbar-container h6 {
+  margin-bottom: 10px;
+  font-weight: bold;
+  text-align: center;
+}
+</style>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
